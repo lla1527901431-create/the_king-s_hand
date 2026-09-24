@@ -1,0 +1,27 @@
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 密钥
+.env
+.env.*
+!.env.example
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 数据文件（隐私，不上传）
+data/*.json
+!data/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# 系统
+.DS_Store
+Thumbs.db

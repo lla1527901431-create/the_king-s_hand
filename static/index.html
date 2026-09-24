@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The King's Hand</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-container">
+    <div class="left-panel">
+      <div class="chat-container">
+        <div class="chat-header">
+          <h2>The King's Hand</h2>
+          <div class="chat-header-actions">
+            <label class="toggle">
+              <input type="checkbox" id="show-steps" checked>
+              思考过程
+            </label>
+            <button id="export-ics-btn">下载 .ics</button>
+            <button id="export-email-btn">发送到邮箱</button>
+            <button id="reset-btn">清空</button>
+          </div>
+        </div>
+        <div id="chat-history" class="chat-history"></div>
+        <div class="chat-input-area">
+          <input id="chat-input" type="text" placeholder="输入任务或 /memory 查询历史..." autocomplete="off">
+          <button id="send-btn">发送</button>
+        </div>
+      </div>
+
+      <div class="task-container">
+        <div class="task-tabs">
+          <button class="tab-btn active" data-tab="confirmed">To be confirmed</button>
+          <button class="tab-btn" data-tab="planned">To be planned</button>
+          <button id="confirm-all-btn" class="btn-confirm">全部确认</button>
+        </div>
+        <div id="task-list" class="task-list"></div>
+      </div>
+    </div>
+
+    <div class="right-panel">
+      <div id="main-calendar" class="main-calendar">
+        <div class="calendar-header">
+          <div class="calendar-title">Week View</div>
+          <div class="calendar-days"></div>
+        </div>
+        <div class="calendar-body" id="calendar-body"></div>
+      </div>
+
+      <div id="bottom-handle" class="bottom-handle">
+        <span>⌃ Next Week</span>
+      </div>
+
+      <div id="next-week-overlay" class="next-week-overlay hidden">
+        <div class="overlay-header">
+          <span id="overlay-title">Next Week</span>
+          <button id="overlay-close">收起</button>
+        </div>
+        <div class="overlay-days-header" id="overlay-days-header"></div>
+        <div class="overlay-body" id="overlay-body"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="event-modal" class="modal-overlay hidden">
+    <div id="modal-details" class="modal-box">
+      <h3>Details</h3>
+      <div id="modal-view">
+        <div id="view-title" class="view-title"></div>
+        <div id="view-time" class="view-time"></div>
+        <div id="view-location" class="view-location"></div>
+        <div id="view-note" class="view-note"></div>
+      </div>
+      <div class="modal-actions">
+        <button id="modal-delete">删除</button>
+        <button id="modal-edit-btn">修改</button>
+        <button id="modal-close">关闭</button>
+      </div>
+    </div>
+
+    <div id="modal-alter" class="modal-box hidden">
+      <h3>Alter</h3>
+      <div id="modal-edit">
+        <label>标题<input id="edit-title" type="text"></label>
+        <label>开始时间<input id="edit-start" type="text" placeholder="YYYY-MM-DD HH:MM"></label>
+        <label>结束时间<input id="edit-end" type="text" placeholder="YYYY-MM-DD HH:MM"></label>
+        <label>地点<input id="edit-location" type="text"></label>
+        <label>备注<textarea id="edit-note" rows="3"></textarea></label>
+      </div>
+      <div class="modal-actions">
+        <button id="modal-save">保存</button>
+        <button id="modal-cancel">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
