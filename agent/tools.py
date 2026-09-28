@@ -1,17 +1,12 @@
 from datetime import datetime
 from langchain_core.tools import tool
-from agent.calendar_store import add_event as _add_event, list_events as _list_events
+from agent.calendar_store import list_events as _list_events
 
 @tool
 def get_current_time() -> str:
     """获取当前日期和时间。当用户询问现在几点、今天日期时使用。"""
     now = datetime.now()
     return now.strftime("%Y-%m-%d %H:%M:%S")
-
-@tool
-def add(a: int, b: int) -> int:
-    """计算两个整数之和。当用户询问两数相加时使用。"""
-    return a + b
 
 @tool
 def add_calendar_event(title: str, start: str, end: str, note: str = "") -> str:

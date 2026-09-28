@@ -115,9 +115,20 @@ function appendSteps(steps) {
   chatHistory.scrollTop = chatHistory.scrollHeight;
 }
 
+/** 把纯文本 /memory 当成打开记忆面板的快捷方式 */
+function handleMemoryCommand(text) {
+  if (!/^\/memory$/i.test(text.trim())) return false;
+  appendMessage("user", text);
+  chatInput.value = "";
+  appendMessage("assistant", "已打开「我的记忆」面板，你可以查看和修改我记住的内容。");
+  if (typeof openMemoryPanel === "function") openMemoryPanel();
+  return true;
+}
+
 async function send() {
   const text = chatInput.value.trim();
   if (!text) return;
+  if (handleMemoryCommand(text)) return;
 
   appendMessage("user", text);
   chatInput.value = "";
@@ -129,12 +140,7 @@ async function send() {
   chatHistory.scrollTop = chatHistory.scrollHeight;
 
   try {
-    const resp = await fetch("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text }),
-    });
-    const data = await resp.json();
+    const data = await api("/chat", { method: "POST", body: { message: text } });
     loading.remove();
     appendSteps(data.steps);
     appendMessage("assistant", data.output);
@@ -208,21 +214,13 @@ function renderTasks() {
 async function addTasks(tasks) {
   for (const t of tasks) {
     if (!t.id) t.id = "task-" + Math.random().toString(36).slice(2, 8);
-    await fetch("/pending/add", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(t),
-    });
+    await api("/pending/add", { method: "POST", body: t });
   }
   await loadPending();
 }
 
 async function deleteTask(id) {
-  await fetch("/pending/delete", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id }),
-  });
+  await api("/pending/delete", { method: "POST", body: { id } });
   await loadPending();
 }
 
@@ -252,17 +250,16 @@ async function modifyTask(id) {
   if (newNote === null) return;
   task.note = newNote.trim() || "";
 
-  await fetch("/pending/update", {
+  await api("/pending/update", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    body: {
       id: task.id,
       title: task.title,
       start: task.start,
       end: task.end,
       location: task.location,
       note: task.note,
-    }),
+    },
   });
   await loadPending();
 }
@@ -281,25 +278,25 @@ async function confirmTask(id) {
     }
   }
 
-  await fetch("/pending/update", {
+  // 先补上结束时间（后端也会兜底，这里保证 UI 立刻一致）
+  await api("/pending/update", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    body: {
       id: task.id,
       title: task.title,
       start: task.start,
       end: task.end,
       location: task.location,
       note: task.note,
-    }),
+    },
   });
 
-  const resp = await fetch("/pending/confirm", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id }),
-  });
-  if (!resp.ok) return;
+  try {
+    await api("/pending/confirm", { method: "POST", body: { id } });
+  } catch (e) {
+    toast("确认失败：" + e.message, "error");
+    return;
+  }
 
   await loadPending();
   await loadEvents();
@@ -315,9 +312,7 @@ async function confirmAll() {
 // ==================== 数据加载 ====================
 async function loadPending() {
   try {
-    const resp = await fetch("/pending");
-    const data = await resp.json();
-    pendingData = data;
+    pendingData = await api("/pending");
     renderTasks();
   } catch (e) {
     console.error("加载待办失败：", e);
@@ -326,8 +321,7 @@ async function loadPending() {
 
 async function loadEvents() {
   try {
-    const resp = await fetch("/events");
-    const data = await resp.json();
+    const data = await api("/events");
     confirmedEvents = data.events || [];
     renderCalendar();
     renderNextWeekOverlay();
@@ -553,14 +547,10 @@ async function saveEventEdit() {
     return;
   }
 
-  const resp = await fetch("/event/update", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-  if (!resp.ok) {
-    alert("保存失败");
+  try {
+    await api("/event/update", { method: "POST", body });
+  } catch (e) {
+    alert("保存失败：" + e.message);
     return;
   }
 
@@ -572,14 +562,10 @@ async function deleteEvent() {
   if (!editingEventId) return;
   if (!confirm("确定删除这个事件？")) return;
 
-  const resp = await fetch("/event/delete", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id: editingEventId }),
-  });
-
-  if (!resp.ok) {
-    alert("删除失败");
+  try {
+    await api("/event/delete", { method: "POST", body: { id: editingEventId } });
+  } catch (e) {
+    alert("删除失败：" + e.message);
     return;
   }
 
@@ -602,12 +588,7 @@ exportEmailBtn.addEventListener("click", async () => {
   if (!toEmail) return;
 
   try {
-    const resp = await fetch("/export_email", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to_email: toEmail.trim() }),
-    });
-    const data = await resp.json();
+    const data = await api("/export_email", { method: "POST", body: { to_email: toEmail.trim() } });
     alert(data.message || "已发送");
   } catch (e) {
     alert("发送失败：" + e.message);
@@ -625,8 +606,14 @@ tabButtons.forEach((btn) => {
 confirmAllBtn.addEventListener("click", confirmAll);
 
 resetBtn.addEventListener("click", async () => {
-  await fetch("/reset", { method: "POST" });
+  try {
+    await api("/reset", { method: "POST" });
+  } catch (e) {
+    toast("清空失败：" + e.message, "error");
+    return;
+  }
   chatHistory.innerHTML = "";
+  appendMessage("assistant", "对话上下文已清空（日历和长期记忆不受影响）。");
   renderTasks();
 });
 
@@ -648,5 +635,7 @@ eventModal.addEventListener("click", (e) => {
 });
 
 // ==================== 初始化 ====================
-loadPending();
-loadEvents();
+// 注意：这里**不能**直接 loadPending() / loadEvents()。
+// 数据要等登录完成（ui.js 的 startApp）之后再拉，否则会以匿名身份请求，
+// 在 RLS 下什么都读不到。
+// 具体启动顺序见 ui.js 的 startApp()。

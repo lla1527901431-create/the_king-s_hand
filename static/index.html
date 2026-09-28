@@ -5,26 +5,65 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>The King's Hand</title>
   <link rel="stylesheet" href="/static/style.css">
+  <!-- 主题层：只负责外观（黑白 / 磨砂玻璃 / 彩色琉璃），必须放在 style.css 之后 -->
+  <link rel="stylesheet" href="/static/theme.css">
 </head>
 <body>
-  <div class="app-container">
+
+  <!-- ==================== 登录 / 注册 ==================== -->
+  <div id="login-screen" class="login-screen">
+    <div class="login-card">
+      <h1>The King&rsquo;s Hand</h1>
+      <p class="login-sub">你的私人日历助手</p>
+
+      <div class="login-tabs">
+        <button id="login-tab-login" class="login-tab active">登录</button>
+        <button id="login-tab-register" class="login-tab">注册</button>
+      </div>
+
+      <form id="login-form" autocomplete="on">
+        <label>邮箱
+          <input id="login-email" type="email" autocomplete="username" placeholder="you@example.com">
+        </label>
+        <label>密码
+          <input id="login-password" type="password" autocomplete="current-password" placeholder="至少 6 位">
+        </label>
+        <div id="login-error" class="login-error hidden"></div>
+        <button id="login-submit" type="submit" class="primary">登录</button>
+      </form>
+
+      <button id="login-resend" class="ghost hidden">没收到确认邮件？重新发送</button>
+      <p id="login-hint" class="login-hint">用你的邮箱和密码登录。</p>
+    </div>
+  </div>
+
+  <!-- ==================== 主界面 ==================== -->
+  <div id="app-root" class="app-container hidden">
     <div class="left-panel">
       <div class="chat-container">
         <div class="chat-header">
-          <h2>The King's Hand</h2>
+          <h2>The King&rsquo;s Hand</h2>
           <div class="chat-header-actions">
             <label class="toggle">
               <input type="checkbox" id="show-steps" checked>
               思考过程
             </label>
+            <button id="memory-btn" title="查看和修改 AI 记住的关于你的信息">我的记忆</button>
             <button id="export-ics-btn">下载 .ics</button>
             <button id="export-email-btn">发送到邮箱</button>
-            <button id="reset-btn">清空</button>
+            <button id="reset-btn" title="只清空对话上下文，不动日历和记忆">清空对话</button>
           </div>
+        </div>
+        <div class="account-bar">
+          <span id="user-chip" class="user-chip" title="点击配置 API Key">…</span>
+          <span class="account-actions">
+            <button id="settings-btn" class="ghost">API Key 设置</button>
+            <button id="logout-btn" class="ghost">退出登录</button>
+          </span>
         </div>
         <div id="chat-history" class="chat-history"></div>
         <div class="chat-input-area">
-          <input id="chat-input" type="text" placeholder="输入任务或 /memory 查询历史..." autocomplete="off">
+          <input id="chat-input" type="text" placeholder="输入任务，例如：明天下午三点开会" autocomplete="off">
           <button id="send-btn">发送</button>
         </div>
       </div>
@@ -63,6 +102,7 @@
     </div>
   </div>
 
+  <!-- ==================== 事件详情 / 编辑 ==================== -->
   <div id="event-modal" class="modal-overlay hidden">
     <div id="modal-details" class="modal-box">
       <h3>Details</h3>
@@ -95,6 +135,60 @@
     </div>
   </div>
 
+  <!-- ==================== API Key 设置 ==================== -->
+  <div id="credentials-modal" class="modal-overlay hidden">
+    <div class="modal-box wide">
+      <h3>API Key 与邮箱设置</h3>
+      <p class="modal-note">
+        这些内容会<strong>加密后保存在你自己的账号下</strong>，只有你能取用 ——
+        即使数据库被拖走，别人拿到的也只是密文。留空表示不修改已保存的值。
+      </p>
+
+      <div class="form-grid">
+        <label>DeepSeek API Key
+          <input id="cred-key" type="password" autocomplete="off" spellcheck="false">
+          <small>用于 AI 对话。在 platform.deepseek.com 创建。</small>
+        </label>
+        <label>QQ 邮箱（可选）
+          <input id="cred-user" type="text" autocomplete="off" spellcheck="false">
+          <small>用于把日历以附件发到邮箱。</small>
+        </label>
+        <label>QQ 邮箱授权码（可选）
+          <input id="cred-pass" type="password" autocomplete="off" spellcheck="false">
+          <small>注意：是 16 位授权码，不是你登录 QQ 邮箱的密码。</small>
+        </label>
+      </div>
+
+      <div id="cred-state" class="cred-state"></div>
+
+      <div class="modal-actions">
+        <button id="cred-clear" class="danger">清空已保存的</button>
+        <button id="cred-save" class="primary">保存</button>
+        <button id="cred-close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 我的记忆 ==================== -->
+  <div id="memory-modal" class="modal-overlay hidden">
+    <div class="modal-box wide">
+      <h3>我的记忆</h3>
+      <p class="modal-note">
+        这些是 AI 记住的关于你的信息。它每次对话都会读到，
+        所以<strong>记错了就在这里直接删掉</strong>。
+      </p>
+      <div id="memory-body" class="memory-body"></div>
+      <div class="modal-actions">
+        <button id="memory-close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="/static/api.js"></script>
   <script src="/static/app.js"></script>
+  <script src="/static/ui.js"></script>
+  <script src="/static/session.js"></script>
 </body>
 </html>

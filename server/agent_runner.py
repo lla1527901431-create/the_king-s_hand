@@ -1,26 +1,33 @@
-import uuid
-from datetime import datetime
-#拿到任务id，获取当前时间
+"""Agent 组装与调度。
+
+多用户改造后这里有两个关键变化：
+
+1. **LLM 客户端按请求构造**。以前 llm / executor 是模块级全局单例，
+   现在每个用户用自己的 DeepSeek key，所以必须每次请求现造。
+   为了不重复建连接，按 (user_id, key指纹) 做了一层小缓存。
+
+2. **对话历史按用户隔离**。以前 _recent 是一个全局列表，
+   多用户下会互相串话（A 说的话出现在 B 的上下文里）。
+
+真正决定"数据属于谁"的仍然是数据库的 RLS，这里的分桶只是为了
+对话上下文不串。
+"""
 
 import json
-from agent.llm import get_llm, get_memory_llm
-from agent.memory_store import load_memory, save_memory, format_memory_text
+import uuid
+from datetime import datetime
 
-
-#LangChain 相关
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.prompts import ChatPromptTemplate  #提示词模板
-from langchain_core.messages import HumanMessage, AIMessage
-from langchain_core.tools import tool  #装饰器，把 emit_tasks 变成 LLM 能调的工具。
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
-from agent.llm import get_llm, get_memory_llm
-from agent.tools import (
-    get_current_time,
-    add,
-    list_calendar_events,
-)
-
+import config
+from agent.llm import build_llm, build_memory_llm, credentials_source
+from agent.memory_store import format_memory_text, load_memory, save_memory
+from agent.tools import get_current_time, list_calendar_events
+from agent.date_tools import resolve_date, resolve_datetime
 from agent.weather_openmeteo import get_weather_forecast
 
 
@@ -47,15 +54,15 @@ def emit_tasks(tasks: list[TaskItem]) -> str:
     - 时间一律用 'YYYY-MM-DD HH:MM' 格式。模糊时间（如"明天下午"）start/end 留空。
     - 只有开始时间没有结束时间时，end 留空，系统会自动往后补 1 小时。
     - 只有结束时间没有开始时间时，start 留空，系统会自动往前补 1 小时。
+    - 时间必须来自 resolve_datetime 的返回值，照抄，不要自己拼。
     """
     return f"已捕获 {len(tasks)} 个任务"
 
 
-llm = get_llm()
-memory_llm = get_memory_llm()
 tools = [
     get_current_time,
-    add,
+    resolve_date,
+    resolve_datetime,
     list_calendar_events,
     get_weather_forecast,
     emit_tasks,
@@ -117,6 +124,16 @@ prompt = ChatPromptTemplate.from_messages([
    下午第一节 14:30-16:05，下午第二节 16:25-18:00。
 
 6. 参考【用户长期记忆】里的偏好来给建议，但不要在回复里直接复述这些记忆。
+
+7. 日期和时间必须用工具算，严禁自己推算：
+   - 任何涉及"星期几""哪天""这周末""下周三"的问题，先调 resolve_date 拿到具体日期，
+     再根据返回值告诉用户。返回里已经带了星期和"该周末 / 下周末"的日期，直接照着说。
+   - 要往 emit_tasks 里填 start / end 时，先调 resolve_datetime 拿到
+     'YYYY-MM-DD HH:MM'，然后**原样照抄**，一个字符都不要自己拼。
+   - 没有调用过工具，就不要填具体时间。
+   - 用户口语里的"周末"一般指周六；如果一件事横跨周六和周日，拆成两天分别 emit_tasks。
+
+8. 如果【用户长期记忆】里的信息与本轮对话冲突，以本轮对话为准，并提醒用户记忆可能过时了。
 """,
     ),
     ("placeholder", "{chat_history}"),
@@ -124,21 +141,48 @@ prompt = ChatPromptTemplate.from_messages([
     ("placeholder", "{agent_scratchpad}"),
 ])
 
-agent = create_tool_calling_agent(llm, tools, prompt)
-executor = AgentExecutor(
-    agent=agent,
-    tools=tools,
-    verbose=False,
-    return_intermediate_steps=True,
-)
 
-_recent = []
-_RECENT_MAX = 10
+# ---------------------------------------------------------------------------
+# 按用户隔离的对话历史
+# ---------------------------------------------------------------------------
+_recent_by_user: dict[str, list] = {}
 
+
+def _history_for(user_id: str) -> list:
+    return _recent_by_user.setdefault(user_id, [])
+
+
+def _remember(user_id: str, user_msg: str, reply: str) -> None:
+    history = _history_for(user_id)
+    history.append(HumanMessage(content=user_msg))
+    history.append(AIMessage(content=reply))
+    while len(history) > config.RECENT_HISTORY_MAX:
+        history.pop(0)
+
+
+def reset_history(user_id: str | None = None) -> None:
+    """清空某个用户的对话历史；user_id 为空时清空全部（仅用于测试）。"""
+    if user_id is None:
+        _recent_by_user.clear()
+    else:
+        _recent_by_user.pop(user_id, None)
+
+
+def history_size(user_id: str) -> int:
+    """给测试/调试用：看某个用户上下文里有多少条消息。"""
+    return len(_recent_by_user.get(user_id, []))
+
+
+# ---------------------------------------------------------------------------
+# 记忆蒸馏
+# ---------------------------------------------------------------------------
 _MEMORY_PROMPT_TEMPLATE = """你是记忆分析助手。请分析下面这轮对话，更新用户的长期记忆。
 
 【现有事实】
 {old_facts}
+
+【现有观察台账】（每条只记录"某次发生了什么"，不代表结论）
+{old_observations}
 
 【现有偏好】
 {old_prefs}
@@ -147,61 +191,111 @@ _MEMORY_PROMPT_TEMPLATE = """你是记忆分析助手。请分析下面这轮对
 用户：{user_msg}
 助手：{assistant_msg}
 
-规则：
-1. facts：关于用户的客观、稳定信息，例如身份、项目、经历、技术栈、工作单位、学历等。
-   - 如果新信息与旧事实冲突，用新信息更新。
-   - 输出合并后的完整事实列表。
-2. preferences：用户的喜好、习惯、交互偏好。同样输出合并后的完整列表。
-3. 如果本轮对话里没有任何值得记的新信息，facts 和 preferences 原样返回。
-4. 严格输出 JSON，不要有多余文字，不要用 markdown 代码块。
+记忆分三块，请分别更新：
 
-输出格式：
-{{"facts": ["..."], "preferences": ["..."]}}
-"""
+━━ facts（用户明确说过的事实）━━
+1. facts 只记录**用户自己说过**的稳定信息：身份、学校、单位、项目、经历、技术栈等。
+2. 禁止把工具返回的数据当成用户的事实：
+   - 禁止从日程列表反推规律。例如日历里 9-22 和 9-24 都有"信息论"，**不得**写成
+     "这门课在周二和周四"。日历条目只是记录，用户从没说过它是周期性的。
+   - 禁止从天气结果、当前时间推任何事实。
+3. 一次性的安排不写进 facts。"用户计划 10-01 打篮球"属于日程，不是长期事实。
+4. 与旧事实冲突时用新信息更新，输出合并后的完整列表。
+
+━━ observations（观察台账：攒证据的地方）━━
+5. 把本轮**用户的行为或说法**记成一条观察，格式："YYYY-MM-DD：简述用户做了什么/说了什么"。
+   - 只写这一轮实际发生的，不要写你的推断。
+   - 例如用户说"这个放到下午吧，我上午要睡觉" → 记
+     "2026-09-28：要求把事情安排到下午，提到上午要睡觉"。
+6. **去重与合并**：如果本轮的情况和台账里已有的观察是同一类现象，
+   **不要新加一条**，而是把那条改写成累计形式（或更新它的日期），例如：
+     "2026-09-20：想把事情放下午，提到上午要睡觉"
+   → "2026-09-20、2026-09-28：多次想把事情安排到下午，理由是想上午睡觉"
+7. 台账最多 30 条，超出时丢掉最旧的。
+8. 与用户说的无关的闲聊（打招呼、问时间）不必记录。
+
+━━ preferences（偏好：从重复观察归纳而来，这块鼓励推断）━━
+9. **重点规则：同一个现象被观察到多次（至少 2~3 次），就归纳成一条偏好。**
+   例：台账里多次出现"想安排到下午，上午要睡觉" → 归纳出
+   "用户上午喜欢睡觉，倾向于把事情安排在下午"。
+   这类偏好非常有用，请主动归纳，不要只当被动记录员。
+10. 归纳出的偏好请在后面标注来源，例如：
+    "用户上午喜欢睡觉，倾向于把事情安排在下午（据多次观察归纳）"。
+    用户自己明确说过的偏好则不用标注。
+11. **只有一次的行为不要写成偏好**，先留在 observations 里等下次。
+12. 不要从单次行为推断偏好。例如用户这次想找不下雨的日期，
+    **不等于**"用户偏好降水概率最低的日期"。
+13. 如果用户明确否认了某条偏好，直接从 preferences 里删掉。
+14. 拿不准的宁可先记进 observations，也不要急着当成偏好。
+
+━━ 输出 ━━
+严格输出 JSON，不要有多余文字，不要用 markdown 代码块：
+
+{{"facts": ["..."], "observations": ["..."], "preferences": ["..."]}}
+
+没有任何一块需要变化时，原样返回该块的内容。"""
 
 
 def _clean_json_text(text: str) -> str:
-    text = text.strip()
+    """清洗 LLM 返回的文本（去掉 markdown 代码块围栏）。"""
+    text = (text or "").strip()
     if text.startswith("```"):
-        lines = text.splitlines()
-        lines = [ln for ln in lines if not ln.strip().startswith("```")]
+        lines = [ln for ln in text.splitlines() if not ln.strip().startswith("```")]
         text = "\n".join(lines).strip()
-        if text.lower().startswith("json"):
-            text = text[4:].strip()
+    # 模型偶尔会加一句 "json" 前缀
+    if text[:4].lower() == "json":
+        text = text[4:].strip()
     return text
 
 
-def _distill_memory(user_msg: str, assistant_msg: str) -> None:
+def _distill_memory(user_msg: str, assistant_msg: str, credentials: dict | None = None) -> None:
+    """把这轮对话蒸馏进长期记忆。
+
+    注意：这里读写的记忆属于**当前请求的用户**（身份在 db 层由 JWT 决定）。
+    """
     memory = load_memory()
     old_facts = "\n".join(f"- {f}" for f in memory.get("facts", [])) or "（无）"
     old_prefs = "\n".join(f"- {p}" for p in memory.get("preferences", [])) or "（无）"
+    old_obs = memory.get("observations", [])
+    old_observations = "\n".join(f"- {o}" for o in old_obs) or "（暂无）"
 
     prompt_text = _MEMORY_PROMPT_TEMPLATE.format(
         old_facts=old_facts,
+        old_observations=old_observations,
         old_prefs=old_prefs,
         user_msg=user_msg,
         assistant_msg=assistant_msg,
     )
 
     try:
-        response = memory_llm.invoke(prompt_text)
+        client = build_memory_llm(**(credentials or {}))
+        response = client.invoke(prompt_text)
         raw = response.content
     except Exception as e:
-        print(f"[memory] LLM 调用失败：{e}")
+        # 记忆蒸馏失败不应该影响主流程
+        print(f"[memory] 蒸馏调用失败：{type(e).__name__}: {e}")
         return
 
     text = _clean_json_text(raw)
     try:
         data = json.loads(text)
     except Exception as e:
-        print(f"[memory] JSON 解析失败：{e}")
-        print(f"[memory] 原始输出：{raw!r}")
+        print(f"[memory] JSON 解析失败：{e} / 原始输出={text[:200]!r}")
+        return
+
+    if not isinstance(data, dict):
+        print("[memory] 返回不是对象，跳过")
         return
 
     memory["facts"] = data.get("facts", memory.get("facts", []))
+    memory["observations"] = data.get("observations", old_obs)
     memory["preferences"] = data.get("preferences", memory.get("preferences", []))
     memory["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    save_memory(memory)
+    try:
+        save_memory(memory)
+    except Exception as e:
+        print(f"[memory] 保存失败：{type(e).__name__}: {e}")
+
 
 def _extract_tasks_from_steps(steps_raw: list) -> tuple[list, list]:
     """从 intermediate_steps 里分出 emit_tasks 的任务和要展示给用户的 steps。"""
@@ -231,38 +325,57 @@ def _extract_tasks_from_steps(steps_raw: list) -> tuple[list, list]:
     return tasks, display_steps
 
 
-def chat(user_input: str) -> dict:
+def _build_executor(credentials: dict) -> AgentExecutor:
+    """按用户凭据构造一次性的 executor。"""
+    llm = build_llm(**credentials)
+    agent = create_tool_calling_agent(llm, tools, prompt)
+    return AgentExecutor(
+        agent=agent,
+        tools=tools,
+        verbose=False,
+        return_intermediate_steps=True,
+        max_iterations=8,
+    )
+
+
+def chat(
+    user_input: str,
+    user_id: str,
+    credentials: dict | None = None,
+    distill: bool = True,
+) -> dict:
+    """处理一轮对话。
+
+    user_id 只用于隔离对话历史；数据归属由数据库 RLS 按 JWT 判定。
+    credentials: {"deepseek_key": "...", "model": "..."} 缺省则用服务器兜底 key。
+    """
+    credentials = credentials or {}
     now = datetime.now()
     weekday_names = ["一", "二", "三", "四", "五", "六", "日"]
 
     memory = load_memory()
     memory_text = format_memory_text(memory)
 
+    executor = _build_executor(credentials)
     result = executor.invoke({
         "input": user_input,
-        "chat_history": _recent,
+        "chat_history": _history_for(user_id),
         "today": now.strftime("%Y-%m-%d"),
         "weekday": weekday_names[now.weekday()],
         "memory_text": memory_text,
     })
 
     reply = result["output"]
-
-    _recent.append(HumanMessage(content=user_input))
-    _recent.append(AIMessage(content=reply))
-    while len(_recent) > _RECENT_MAX:
-        _recent.pop(0)
+    _remember(user_id, user_input, reply)
 
     tasks, steps = _extract_tasks_from_steps(result.get("intermediate_steps", []))
 
-    _distill_memory(user_input, reply)
+    if distill:
+        _distill_memory(user_input, reply, credentials)
 
     return {
-        "output": result["output"],
+        "output": reply,
         "steps": steps,
         "tasks": tasks,
+        "key_source": credentials_source(credentials.get("deepseek_key")),
     }
-
-
-def reset_history() -> None:
-    _recent.clear()

@@ -5,6 +5,10 @@ from email.message import EmailMessage
 
 from icalendar import Calendar, Event
 
+# SMTP 入口固定为 QQ 邮箱，不接受用户指定主机（防 SSRF）
+SMTP_HOST = "smtp.qq.com"
+SMTP_PORT = 465
+
 
 def _parse_dt(s: str) -> datetime | None:
     """把 'YYYY-MM-DD HH:MM' 转成 datetime。解析失败返回 None。"""
@@ -46,15 +50,29 @@ def build_ics(events: list) -> str:
     return cal.to_ical().decode("utf-8")
 
 
-def send_ics_email(events: list, to_email: str) -> tuple[bool, str]:
-    """把 ics 作为附件发到指定邮箱。返回 (成功?, 提示信息)。"""
-    host = os.getenv("SMTP_HOST")
-    port = int(os.getenv("SMTP_PORT", "465"))
-    user = os.getenv("SMTP_USER")
-    password = os.getenv("SMTP_PASS")
+def send_ics_email(
+    events: list,
+    to_email: str,
+    smtp_user: str = "",
+    smtp_pass: str = "",
+) -> tuple[bool, str]:
+    """把 ics 作为附件发到指定邮箱。返回 (成功?, 提示信息)。
 
-    if not all([host, user, password]):
-        return False, "SMTP 配置缺失，请检查 .env"
+    凭据来自**用户自己填的** 邮箱 + 授权码（存在 user_secrets 里，加密）。
+    也支持回落到 .env 里的 SMTP_*，方便本机调试。
+
+    ⚠️ 主机和端口是**写死的**，不接受用户传入：
+       允许用户指定 SMTP 主机 = 让服务器去连任意地址 = SSRF，
+       可以被用来扫描内网。所以只允许 QQ 邮箱的固定入口。
+    """
+    user = (smtp_user or os.getenv("SMTP_USER") or "").strip()
+    password = (smtp_pass or os.getenv("SMTP_PASS") or "").strip()
+
+    if not user or not password:
+        return False, "还没有配置邮箱授权码，请先在页面上填写你的 QQ 邮箱和 16 位授权码。"
+
+    if not to_email or "@" not in to_email:
+        return False, "收件邮箱格式不正确。"
 
     if not events:
         return False, "没有可导出的事件"
@@ -78,13 +96,14 @@ def send_ics_email(events: list, to_email: str) -> tuple[bool, str]:
 
     try:
         with smtplib.SMTP_SSL(
-            host, port, timeout=15, local_hostname="localhost"
+            SMTP_HOST, SMTP_PORT, timeout=15, local_hostname="localhost"
         ) as server:
             server.login(user, password)
             server.send_message(msg)
+    except smtplib.SMTPAuthenticationError:
+        return False, "邮箱授权码不正确（注意：这里要填 QQ 邮箱的 16 位授权码，不是登录密码）。"
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return False, f"发送失败：{e}"
+        # 不要把异常原文直接抛给前端：SMTP 报错里可能带主机名和用户名
+        return False, f"发送失败：{type(e).__name__}"
 
     return True, f"已发送到 {to_email}"
