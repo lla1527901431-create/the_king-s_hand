@@ -90,6 +90,22 @@ def startup_check() -> list[str]:
             "SECRET_MASTER_KEY 未设置：用户填写的 DeepSeek key / QQ 授权码将无法加密保存。"
             "请运行 python tools/gen_master_key.py 生成，并离线备份。"
         )
+    else:
+        # 长度必须正好 32 字节（AES-256），否则加解密会在运行时才失败。
+        # 这个检查是踩过坑之后加的：手抄密钥时漏掉一个字符，base64 长度差 1、
+        # 解码后 31 字节，直到用户点"保存"报错才发现。
+        try:
+            from agent import crypto
+
+            crypto._load_key()
+            warnings.append(
+                f"SECRET_MASTER_KEY 指纹：{crypto.key_fingerprint()}"
+                "（部署时用它核对服务器与本机的密钥是否一致）"
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"SECRET_MASTER_KEY 不合法，服务无法安全地加解密用户密钥：{e}"
+            ) from e
 
     if not COOKIE_SECURE:
         warnings.append(

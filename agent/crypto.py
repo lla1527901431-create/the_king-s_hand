@@ -74,6 +74,22 @@ def is_configured() -> bool:
         return False
 
 
+def key_fingerprint() -> str:
+    """主密钥的指纹（sha256 前 12 位十六进制）。
+
+    用于**核对不同环境用的是不是同一把密钥** —— 部署时把本地的指纹和
+    服务器日志里的指纹一比就知道，而不需要把密钥本身抄来抄去。
+
+    ⚠️ 这是单向哈希，不能反推出密钥；但仍然只该出现在自己的日志里。
+    """
+    import hashlib
+
+    try:
+        return hashlib.sha256(_load_key()).hexdigest()[:12]
+    except CryptoNotConfigured:
+        return "(未配置)"
+
+
 def encrypt(plaintext: str) -> str:
     """加密一个字符串。返回 v1.<nonce>.<密文> 形式。"""
     if plaintext is None:
