@@ -417,14 +417,16 @@ button.ghost:hover {
   color: var(--paper-300);
 }
 
+/* 选中的 tab：用一层浅白底表示选中（不是白底按钮，所以文字保持白） */
 .task-container .tab-btn.active {
   background: rgba(255, 255, 255, 0.12);
   color: var(--paper-000);
 }
 
-.task-container #confirm-all-btn {
-  color: var(--paper-000);
-}
+/* ⚠️ 这里**不要**给 #confirm-all-btn 设 color！
+   它是白底按钮，文字必须保持黑色（规则见文件前部"白底按钮统一配黑字"）。
+   之前这里写了 color: var(--paper-000)，优先级又比那条高，
+   结果把"全部确认"的字盖回白色 —— 白底白字，看不见。 */
 
 /* ==========================================================================
    任务卡片（待确认 / 待计划）
