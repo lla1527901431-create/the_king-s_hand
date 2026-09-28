@@ -15,7 +15,7 @@
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.messages import AIMessage, HumanMessage
@@ -160,20 +160,55 @@ prompt = ChatPromptTemplate.from_messages([
 
 # ---------------------------------------------------------------------------
 # 按用户隔离的对话历史
+#
+# 每个用户一条记录：{"messages": [...], "last_active": datetime}
+# 只增不减会导致内存泄漏（每个来过一次的用户永久占一份），所以按空闲时间回收。
 # ---------------------------------------------------------------------------
-_recent_by_user: dict[str, list] = {}
+_recent_by_user: dict[str, dict] = {}
+
+# 空闲多久之后回收该用户的对话上下文
+IDLE_TIMEOUT_SECONDS = config.RECENT_HISTORY_IDLE_MINUTES * 60
+
+
+def _now() -> datetime:
+    return datetime.now()
+
+
+def _cleanup_idle_users() -> int:
+    """清掉长时间没说话的用户上下文，返回清理了几个。
+
+    放在每次对话时顺手做，不需要额外的定时任务。
+    注意：只清"对话上下文"，**不影响**用户的日历、待办和长期记忆。
+    """
+    cutoff = _now() - timedelta(seconds=IDLE_TIMEOUT_SECONDS)
+    stale = [uid for uid, rec in _recent_by_user.items() if rec.get("last_active", cutoff) < cutoff]
+    for uid in stale:
+        _recent_by_user.pop(uid, None)
+    if stale:
+        logger.info("回收了 %d 个空闲用户的对话上下文（超过 %d 分钟没活动）",
+                    len(stale), config.RECENT_HISTORY_IDLE_MINUTES)
+    return len(stale)
 
 
 def _history_for(user_id: str) -> list:
-    return _recent_by_user.setdefault(user_id, [])
+    record = _recent_by_user.get(user_id)
+    if record is None:
+        record = {"messages": [], "last_active": _now()}
+        _recent_by_user[user_id] = record
+    return record["messages"]
 
 
 def _remember(user_id: str, user_msg: str, reply: str) -> None:
+    # 顺手回收空闲用户，避免字典无限增长
+    _cleanup_idle_users()
+
     history = _history_for(user_id)
     history.append(HumanMessage(content=user_msg))
     history.append(AIMessage(content=reply))
     while len(history) > config.RECENT_HISTORY_MAX:
         history.pop(0)
+
+    _recent_by_user[user_id]["last_active"] = _now()
 
 
 def reset_history(user_id: str | None = None) -> None:
@@ -186,7 +221,12 @@ def reset_history(user_id: str | None = None) -> None:
 
 def history_size(user_id: str) -> int:
     """给测试/调试用：看某个用户上下文里有多少条消息。"""
-    return len(_recent_by_user.get(user_id, []))
+    return len(_recent_by_user.get(user_id, {}).get("messages", []))
+
+
+def tracked_user_count() -> int:
+    """给测试/调试用：当前在内存里跟踪了多少个用户。"""
+    return len(_recent_by_user)
 
 
 # ---------------------------------------------------------------------------

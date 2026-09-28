@@ -63,9 +63,17 @@ RETRY_BACKOFF = float(get_secret("SUPABASE_RETRY_BACKOFF", "0.8"))
 # 对话上下文保留的最近消息数（按用户分别计算）
 RECENT_HISTORY_MAX = int(get_secret("RECENT_HISTORY_MAX", "10"))
 
+# 某个用户多久没说话就回收他的对话上下文（分钟）。
+# 对话历史存在进程内存里，不回收的话每个来过一次的用户都会永久占一份。
+RECENT_HISTORY_IDLE_MINUTES = int(get_secret("RECENT_HISTORY_IDLE_MINUTES", "30"))
+
 # Cookie 是否带 Secure 标记。本机 http 调试必须为 false，
 # 一旦部署到 HTTPS（公网），必须设成 true。
 COOKIE_SECURE = get_secret("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
+
+# 调试模式：开启热重载，并让 /health 返回诊断细节。
+# ⚠️ 公网部署必须为 false（main.py 会据此决定是否 reload）。
+DEBUG = get_secret("DEBUG", "false").lower() in ("1", "true", "yes")
 
 
 def startup_check() -> list[str]:
@@ -114,9 +122,10 @@ def startup_check() -> list[str]:
         )
 
     if not os.getenv("DEEPSEEK_API_KEY"):
+        # 这是**正常情况**（用户自己填 key），所以措辞不要说成像是出错
         warnings.append(
-            "未设置 DEEPSEEK_API_KEY：现在默认要求用户在页面上自己填 key，"
-            "此项仅作为你本机调试的兜底，可以忽略。"
+            f"未配置服务器兜底 DEEPSEEK_API_KEY —— 这是预期行为："
+            f"用户需在页面上填自己的 Key。日志里的 key_source 会显示 u=user。"
         )
 
     return warnings

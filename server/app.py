@@ -206,15 +206,32 @@ def index():
 
 @app.get("/health")
 def health():
-    from agent import crypto, db
+    """健康检查。
+
+    公网（DEBUG=false）**只**返回 {"status": "..."} —— 之前会把
+    crypto_configured / cookie_secure 一起返回，等于告诉任何探测者
+    "这个站点的会话 cookie 没加 Secure 保护"，是白送情报。
+
+    细节只在本地调试（DEBUG=true）时显示，方便你自己排查。
+    """
+    from agent import db
 
     ok, message = db.health()
-    return {
-        "status": "ok" if ok else "degraded",
-        "supabase": message,
-        "crypto_configured": crypto.is_configured(),
-        "cookie_secure": config.COOKIE_SECURE,
-    }
+    payload = {"status": "ok" if ok else "degraded"}
+
+    if config.DEBUG:
+        from agent import crypto
+        from server.agent_runner import tracked_user_count
+
+        payload.update({
+            "supabase": message,
+            "crypto_configured": crypto.is_configured(),
+            "key_fingerprint": crypto.key_fingerprint(),
+            "cookie_secure": config.COOKIE_SECURE,
+            "tracked_users": tracked_user_count(),
+        })
+
+    return payload
 
 
 # ---------------------------------------------------------------------------
