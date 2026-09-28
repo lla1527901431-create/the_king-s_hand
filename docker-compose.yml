@@ -1,0 +1,66 @@
+# ============================================================================
+# The King's Hand —— 一键启动（腾讯云 CVM）
+# ============================================================================
+# 用法：
+#   docker compose up -d --build     启动（后台）
+#   docker compose logs -f app       看日志
+#   docker compose down              停止
+#   docker compose up -d --build     改完代码后重建
+#
+# 前置：
+#   1. 服务器上放好 .env（从本地复制，含 Supabase 配置和 SECRET_MASTER_KEY）
+#   2. 证书放到 ./certs/  见 DEPLOY.md
+# ============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # 应用本体。只监听 127.0.0.1，不直接暴露到公网 —— 外部流量一律走 Nginx。
+  # ---------------------------------------------------------------------------
+  app:
+    build: .
+    image: kings-hand:latest
+    container_name: kings-hand
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      DEBUG: "false"
+      WORKERS: "1"
+      LOG_LEVEL: INFO
+      # ⚠️ 公网必须 true：让会话 cookie 只走 HTTPS
+      COOKIE_SECURE: "true"
+    ports:
+      # 只绑到宿主机本地回环，公网访问不到这个端口，只能经 Nginx
+      - "127.0.0.1:8000:8000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"      # 单个日志文件最大 10MB
+        max-file: "5"        # 最多保留 5 个，避免磁盘被日志撑满
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  # ---------------------------------------------------------------------------
+  # Nginx：负责 HTTPS 卸载（证书在这一层）+ 把请求转给 app
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: kings-hand-nginx
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

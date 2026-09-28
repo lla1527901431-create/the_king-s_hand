@@ -126,6 +126,11 @@ async def current_token(
             headers={"X-Auth-Code": "invalid_token"},
         )
 
+    # 让后续所有日志自动带上这个用户（不用每处手写）
+    from server.logging_config import set_user_id
+
+    set_user_id(user_id)
+
     exp = claims.get("exp")
     if isinstance(exp, (int, float)) and exp < time.time():
         # 交给上层去续期，而不是直接让用户重新登录

@@ -29,6 +29,9 @@ from agent.memory_store import format_memory_text, load_memory, save_memory
 from agent.tools import get_current_time, list_calendar_events
 from agent.date_tools import resolve_date, resolve_datetime
 from agent.weather_openmeteo import get_weather_forecast
+from server.logging_config import get_logger
+
+logger = get_logger("agent")
 
 
 class TaskItem(BaseModel):
@@ -100,17 +103,30 @@ prompt = ChatPromptTemplate.from_messages([
    - 如果上一轮你追问了时间，而用户这一轮给出了明确时间，进入第四步。
    - 如果用户这一轮仍然只给模糊时间或没有回答时间，则把任务按无时间处理，进入第四步。
 
-   第四步：调用 emit_tasks 把任务结构化传给系统
+   第四步：天气主动提醒（不要等用户问，这一步很重要）
+   - 只要任务**可能涉及户外**，就主动调用 get_weather_forecast 查天气，
+     并在 note 和回复里给出提醒。判断依据包括但不限于：
+     运动（篮球、跑步、骑行、游泳）、出行（跨城、机场、车站、自驾）、
+     户外活动（露营、爬山、拍照、户外聚会），以及地点明显在室外的任务。
+   - 时间明确就直接查那一天的天气；时间不明确就查用户提到的大致时间范围，
+     并说明"具体时间定了可以再确认一次"。
+   - 提醒要具体、可行动，不要只说结论。例如：
+     "9/26 周六有中雨、降水概率 42%，建议带伞或改到周日（晴，27%）"。
+   - 天气不好就主动给备选时间；天气很好简单说一句即可。
+   - 反过来，纯室内任务（开会、上课、吃饭、写代码）**不要**查天气，
+     也不要往 note 里塞无关的天气信息。
+
+   第五步：调用 emit_tasks 把任务结构化传给系统
    - 明确时间：start 填具体时间，end 可留空（系统会自动补 1 小时）。
    - 模糊或无时间：start 和 end 都留空。
    - note 字段：把值得关注的信息以简明扼要的形式写进去。
-     例如：天气提醒（"下午有雨"）、冲突信息（"与 10:00 开会冲突"）、任务性质（"户外活动"）。
-     没有值得关注的信息就留空。
+     例如：天气提醒（"下午有雨，建议带伞"）、冲突信息（"与 10:00 开会冲突"）、
+     任务性质（"户外活动"）。没有值得关注的信息就留空。
 
-   第五步：用自然语言回复用户
+   第六步：用自然语言回复用户
    - 明确时间的任务：告诉用户"已将任务添加到 To be confirmed "。
    - 无明确时间的任务：告诉用户"已将任务添加到 To be planned "。
-   - 如果查了天气、有冲突、或 note 里有信息，一并告诉用户，并给出建议。
+   - 天气提醒、冲突信息、note 里的内容，都要在回复里一并告诉用户并给出建议。
 
 2. 不要在对话里直接说"已添加"、"已写入日历"，因为你无法直接写日历。
    写日历由用户在左侧点确认按钮完成。
@@ -273,18 +289,18 @@ def _distill_memory(user_msg: str, assistant_msg: str, credentials: dict | None 
         raw = response.content
     except Exception as e:
         # 记忆蒸馏失败不应该影响主流程
-        print(f"[memory] 蒸馏调用失败：{type(e).__name__}: {e}")
+        logger.warning("记忆蒸馏调用失败：%s: %s", type(e).__name__, str(e)[:200])
         return
 
     text = _clean_json_text(raw)
     try:
         data = json.loads(text)
     except Exception as e:
-        print(f"[memory] JSON 解析失败：{e} / 原始输出={text[:200]!r}")
+        logger.warning("记忆蒸馏返回的 JSON 解析失败：%s / 原始输出=%r", e, text[:200])
         return
 
     if not isinstance(data, dict):
-        print("[memory] 返回不是对象，跳过")
+        logger.warning("记忆蒸馏返回的不是对象，跳过")
         return
 
     memory["facts"] = data.get("facts", memory.get("facts", []))
@@ -294,7 +310,7 @@ def _distill_memory(user_msg: str, assistant_msg: str, credentials: dict | None 
     try:
         save_memory(memory)
     except Exception as e:
-        print(f"[memory] 保存失败：{type(e).__name__}: {e}")
+        logger.warning("记忆保存失败：%s: %s", type(e).__name__, str(e)[:200])
 
 
 def _extract_tasks_from_steps(steps_raw: list) -> tuple[list, list]:

@@ -1,5 +1,6 @@
 #业务逻辑都在 agent_runner.py 和 agent/ 里，这里只做"接口"
 
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -31,13 +32,59 @@ from server.auth import (
     db_errors,
     set_session_cookies,
 )
+from server.logging_config import (
+    get_logger,
+    set_key_source,
+    set_request_id,
+    set_user_id,
+    setup_logging,
+)
 
 BASE_DIR = Path(__file__).parent.parent
 STATIC_DIR = BASE_DIR / "static"
 
+setup_logging()
+logger = get_logger("app")
+
 app = FastAPI(title="The King's Hand")
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+# ---------------------------------------------------------------------------
+# 请求日志：给每个请求一个短 id，并记录方法、路径、状态、耗时
+# ---------------------------------------------------------------------------
+import uuid as _uuid  # noqa: E402
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    request_id = _uuid.uuid4().hex[:6]
+    set_request_id(request_id)
+    set_user_id("-")
+    set_key_source("-")
+
+    # 静态资源太频繁，不打日志（否则日志里全是 css/js 的 200）
+    quiet = request.url.path.startswith("/static") or request.url.path == "/health"
+
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        # 未处理异常：记一条带请求 id 的摘要，然后把异常交回 Starlette。
+        # ⚠️ 不要在这里也打完整堆栈 —— FastAPI 内置的 ServerErrorMiddleware
+        #    会负责记录详细堆栈并返回 500。两边都打会造成同一条错误重复两遍。
+        logger.error("请求异常终止 %s %s", request.method, request.url.path)
+        raise
+
+    elapsed = (time.perf_counter() - started) * 1000
+    if not quiet:
+        level = logger.warning if response.status_code >= 400 else logger.info
+        level("%s %s -> %s  %.0fms", request.method, request.url.path,
+              response.status_code, elapsed)
+
+    response.headers["X-Request-Id"] = request_id
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +190,7 @@ def _user_credentials() -> dict:
     try:
         secrets = secrets_store.load_secrets()
     except Exception as e:
-        print(f"[credentials] 读取失败：{type(e).__name__}: {e}")
+        logger.warning("读取用户密钥失败：%s: %s", type(e).__name__, e)
         return {}
     key = secrets.get("deepseek_key") or ""
     return {"deepseek_key": key} if key else {}
@@ -345,6 +392,7 @@ def chat_endpoint(
         raise HTTPException(status_code=400, detail="消息不能为空。")
 
     credentials = _user_credentials()
+    set_key_source("user" if credentials else "none")
 
     with db_errors():
         try:
@@ -355,7 +403,7 @@ def chat_endpoint(
             # 把常见的几类失败翻译成用户能照着做的提示，而不是甩一个类名
             name = type(e).__name__
             text = str(e)
-            print(f"[chat] 失败：{name}: {text}")
+            logger.warning("对话失败：%s: %s", name, text[:300])
 
             if "AuthenticationError" in name or "401" in text or "invalid" in text.lower() and "api key" in text.lower():
                 raise HTTPException(
@@ -613,7 +661,7 @@ def export_email_endpoint(
     try:
         secrets = secrets_store.load_secrets()
     except Exception as e:
-        print(f"[export] 读取用户邮箱配置失败：{type(e).__name__}")
+        logger.warning("读取用户邮箱配置失败：%s", type(e).__name__)
 
     ok, msg = send_ics_email(
         events,
@@ -621,4 +669,8 @@ def export_email_endpoint(
         smtp_user=secrets.get("smtp_user", ""),
         smtp_pass=secrets.get("smtp_pass", ""),
     )
+    if ok:
+        logger.info("已发送日历邮件到 %s（%d 个事件）", req.to_email, len(events))
+    else:
+        logger.warning("发送日历邮件失败：%s", msg)
     return {"status": "ok" if ok else "error", "message": msg}

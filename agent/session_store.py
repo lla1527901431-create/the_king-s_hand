@@ -28,10 +28,14 @@
 
 from __future__ import annotations
 
+import logging
+
 import requests
 
 import config
 from agent import db, http_client
+
+logger = logging.getLogger("agent.session")
 
 ACCESS_COOKIE = "kh_access"
 REFRESH_COOKIE = "kh_refresh"
@@ -230,7 +234,7 @@ def logout(access_token: str) -> None:
             headers={**_headers(), "Authorization": f"Bearer {access_token}"},
         )
     except Exception as e:
-        print(f"[session] 撤销会话失败（忽略）：{type(e).__name__}")
+        logger.warning("撤销会话失败（忽略，本地 cookie 照清）：%s", type(e).__name__)
 
 
 def user_id_of(access_token: str) -> str:

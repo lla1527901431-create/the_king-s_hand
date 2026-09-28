@@ -1,5 +1,9 @@
+import logging
+
 import requests
 from langchain_core.tools import tool
+
+logger = logging.getLogger("agent.weather")
 
 # WMO 天气代码 -> 中文描述
 WEATHER_CODE_MAP = {
@@ -40,7 +44,7 @@ def _geocode(city: str) -> tuple[float, float, str] | None:
         resp = requests.get(url, params=params, timeout=10)
         data = resp.json()
     except Exception as e:
-        print(f"[geocode] 请求失败：{e}")
+        logger.warning("城市地理编码请求失败（city=%s）：%s", city, type(e).__name__)
         return None
 
     results = data.get("results") or []

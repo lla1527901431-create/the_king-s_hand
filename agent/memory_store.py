@@ -14,7 +14,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from agent import db
+
+logger = logging.getLogger("agent.store")
 
 TABLE = "memories"
 COLUMNS = "facts,observations,preferences,updated_at"
@@ -52,8 +56,8 @@ def _write(payload: dict) -> None:
     except db.SupabaseError as e:
         if e.code not in ("PGRST204", "42703") or "observations" not in payload:
             raise
-        print(
-            "[memory] 数据库里没有 observations 列，本次降级为只存 facts/preferences。"
+        logger.warning(
+            "数据库里没有 observations 列，本次降级为只存 facts/preferences。"
             "请执行 sql/03_add_observations.sql 以启用观察台账。"
         )
         payload = {k: v for k, v in payload.items() if k != "observations"}

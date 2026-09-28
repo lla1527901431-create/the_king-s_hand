@@ -1,0 +1,36 @@
+# Docker 构建时排除的内容 —— 这些都不该进镜像
+# 好处：镜像更小、构建更快、密钥绝不会被打包进去
+
+# 密钥与本地配置（必须排除！）
+.env
+.env.*
+!.env.example
+
+# 虚拟环境（镜像里会重新装依赖）
+.venv/
+venv/
+env/
+
+# Git
+.git/
+.gitignore
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 本地运行数据（现在是 Supabase 存了，这些只是遗留备份，含隐私）
+data/
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 文档与部署脚本不需要进镜像
+README.md
+DEPLOY.md
+*.tmp
