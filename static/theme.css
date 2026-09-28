@@ -39,14 +39,14 @@
   --edge: rgba(255, 255, 255, 0.085);
   --edge-bright: rgba(255, 255, 255, 0.22);
 
-  /* 事件卡片的灰阶层次：纯中性灰，靠明度区分不同的事件
-     （原来是彩色，用户要求全部黑白；这里必须是 R=G=B 的真灰，不能偏色） */
-  --luster-1: #262626;
-  --luster-2: #303030;
-  --luster-3: #3a3a3a;
-  --luster-4: #1f1f1f;
-  --luster-5: #2c2c2c;
-  --luster-edge: rgba(255, 255, 255, 0.16);
+  /* 事件卡片的灰阶层次：都是"白偏灰"的浅色，靠明暗区分不同事件
+     —— 卡片用浅底 + 黑字（用户要求） */
+  --luster-1: #cfcfcf;
+  --luster-2: #d9d9d9;
+  --luster-3: #e2e2e2;
+  --luster-4: #c6c6c6;
+  --luster-5: #dedede;
+  --luster-edge: rgba(0, 0, 0, 0.35);
 
   --shadow-deep: 0 20px 60px rgba(0, 0, 0, 0.62);
   --shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.45);
@@ -182,12 +182,16 @@ input[type="checkbox"] {
 /* ==========================================================================
    按钮
    ========================================================================== */
+/* 白底按钮统一配黑字。
+   注意 #modal-save：它只有 id、没有 .primary 类，很容易漏掉 ——
+   漏掉的话就是"白底白字"，按钮上的字直接看不见。 */
 #send-btn,
 .btn-confirm,
+#modal-save,
 .login-card button.primary,
 .modal-actions button.primary {
   background: var(--paper-000);
-  color: var(--ink-950);
+  color: #000000;
   border: 1px solid var(--paper-000);
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -196,11 +200,12 @@ input[type="checkbox"] {
 
 #send-btn:hover,
 .btn-confirm:hover,
+#modal-save:hover,
 .login-card button.primary:hover:not(:disabled),
 .modal-actions button.primary:hover {
   background: var(--paper-300);
   border-color: var(--paper-300);
-  color: var(--ink-1000);
+  color: #000000;
   transform: translateY(-1px);
   box-shadow: 0 8px 22px rgba(255, 255, 255, 0.14);
 }
@@ -337,40 +342,40 @@ button.ghost:hover {
 }
 
 /* ==========================================================================
-   彩色琉璃 —— 日历事件卡片
-   用户要求：纯色（不要微渐变）、每个任务块不同颜色、低饱和，因为底色是黑的。
-   所以这里是"暗版琉璃"：低饱和纯色 + 一圈高光边 + 极轻的顶部反光。
+   日历事件卡片
+   用户要求：浅灰底（白偏灰）+ 黑字，越简单越好。
+   所以这里是"亮色卡片"：浅灰纯色 + 深色文字 + 一圈深色细边。
+   五级明度用来区分不同事件，但全部落在"浅灰"这个区间里。
    ========================================================================== */
 .event-card {
-  /* 兜底用变量；具体颜色由下面 nth-of-type 按 5 色循环分配 */
+  /* 兜底用变量；具体颜色由下面 nth-of-type 按 5 级循环分配 */
   background: var(--event-color, var(--luster-1)) !important;
-  border: 1px solid var(--luster-edge);
+  border: 1px solid rgba(0, 0, 0, 0.35);
   border-radius: 5px;
-  color: var(--paper-100);
+  color: #101010;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.01em;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  text-shadow: none;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    inset 0 0 0 1px rgba(0, 0, 0, 0.18),
-    0 3px 10px rgba(0, 0, 0, 0.5);
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 2px 8px rgba(0, 0, 0, 0.45);
   overflow: hidden;
   position: absolute;
   transition: transform 0.14s ease, box-shadow 0.18s ease, filter 0.18s ease;
 }
 
-/* 玻璃感：只留一层极轻的顶部反光，不再是多段渐变 */
+/* 只有很淡的一层顶部反光，保住玻璃感但不显脏 */
 .event-card::before {
   content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.09), transparent 55%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.32), transparent 60%);
 }
 
 /* --------------------------------------------------------------------------
-   五级明度循环 —— 纯灰阶，靠明暗区分事件（黑白主题）
+   五级浅灰循环 —— 都在"白偏灰"区间内（#cfcfcf ~ #e2e2e2）
    -------------------------------------------------------------------------- */
 .event-card:nth-of-type(5n + 1) {
   background: var(--luster-1) !important;
@@ -390,10 +395,10 @@ button.ghost:hover {
 
 .event-card:hover {
   transform: translateY(-1px);
-  filter: brightness(1.14);
+  filter: brightness(1.06);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.26),
-    0 8px 22px rgba(0, 0, 0, 0.55);
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 6px 18px rgba(0, 0, 0, 0.5);
 }
 
 /* ==========================================================================
@@ -454,13 +459,14 @@ button.ghost:hover {
 .task-card .task-actions button.confirm {
   background: var(--paper-000);
   border-color: var(--paper-000);
-  color: var(--ink-1000);
+  color: #000000;
   font-weight: 600;
 }
 
 .task-card .task-actions button.confirm:hover {
   background: var(--paper-300);
   border-color: var(--paper-300);
+  color: #000000;
 }
 
 .task-card .task-actions button.modify,
