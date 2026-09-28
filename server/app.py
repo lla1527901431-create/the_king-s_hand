@@ -352,10 +352,36 @@ def chat_endpoint(
         except CredentialsMissing as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except Exception as e:
-            print(f"[chat] 失败：{type(e).__name__}: {e}")
+            # 把常见的几类失败翻译成用户能照着做的提示，而不是甩一个类名
+            name = type(e).__name__
+            text = str(e)
+            print(f"[chat] 失败：{name}: {text}")
+
+            if "AuthenticationError" in name or "401" in text or "invalid" in text.lower() and "api key" in text.lower():
+                raise HTTPException(
+                    status_code=401,
+                    detail="DeepSeek API Key 无效或已失效（服务器返回 401）。"
+                           "请点右上角「API Key 设置」更新你的 Key。",
+                ) from e
+            if "RateLimit" in name or "429" in text or "insufficient" in text.lower() or "quota" in text.lower():
+                raise HTTPException(
+                    status_code=402,
+                    detail="DeepSeek 账户余额不足或请求过于频繁，请检查你的账户额度。",
+                ) from e
+            if "timeout" in name.lower() or "timeout" in text.lower():
+                raise HTTPException(
+                    status_code=504,
+                    detail="调用 DeepSeek 超时了。可能是网络不稳定，或问题太复杂 —— 可以重试一次。",
+                ) from e
+            if "Connection" in name or "APIConnection" in name:
+                raise HTTPException(
+                    status_code=502,
+                    detail="连不上 DeepSeek 服务，请检查网络（或代理）后重试。",
+                ) from e
+
             raise HTTPException(
                 status_code=502,
-                detail=f"对话处理失败（{type(e).__name__}）。如果是刚配置完 key，请确认 key 有效。",
+                detail=f"对话处理失败（{name}）。如果刚配置过 Key，请确认它是否有效。",
             ) from e
     return result
 

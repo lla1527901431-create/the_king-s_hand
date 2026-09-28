@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import time
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -23,6 +22,7 @@ from typing import Any
 import requests
 
 import config
+from agent import http_client
 
 # 当前请求的用户 JWT。为空表示匿名请求（RLS 下什么都读不到）。
 _user_token: ContextVar[str] = ContextVar("supabase_user_token", default="")
@@ -115,53 +115,39 @@ def request(
     prefer: str = "",
     retries: int | None = None,
 ) -> requests.Response:
-    """发一个 PostgREST 请求，带超时与重试。失败抛 SupabaseError。"""
+    """发一个 PostgREST 请求。
+
+    连接复用交给 agent/http_client.py 的连接池 —— 这一步至关重要：
+    每次新建 HTTPS 连接要 5 秒左右（跨境链路的 DNS+TCP+TLS），
+    复用之后单次往返只要 0.4 秒。
+    """
     url = f"{config.SUPABASE_URL}/rest/v1/{path.lstrip('/')}"
-    attempts = config.REQUEST_RETRIES if retries is None else retries
-    last_error: Exception | None = None
 
-    for attempt in range(attempts + 1):
-        try:
-            resp = requests.request(
-                method,
-                url,
-                headers=_headers(prefer),
-                params=params,
-                json=json_body,
-                timeout=config.REQUEST_TIMEOUT,
-            )
-        except requests.exceptions.Timeout as e:
-            last_error = e
-            if attempt < attempts:
-                time.sleep(config.RETRY_BACKOFF * (2**attempt))
-                continue
-            raise SupabaseError(
-                0, "timeout",
-                "连接 Supabase 超时，请检查网络（或代理）后重试。",
-                repr(e),
-            ) from e
-        except requests.exceptions.RequestException as e:
-            last_error = e
-            if attempt < attempts:
-                time.sleep(config.RETRY_BACKOFF * (2**attempt))
-                continue
-            raise SupabaseError(
-                0, "network",
-                "无法连接 Supabase，请检查网络（或代理）。",
-                repr(e),
-            ) from e
+    try:
+        resp = http_client.request(
+            method,
+            url,
+            headers=_headers(prefer),
+            params=params,
+            json_body=json_body,
+        )
+    except requests.exceptions.Timeout as e:
+        raise SupabaseError(
+            0, "timeout",
+            "连接 Supabase 超时，请检查网络（或代理）后重试。",
+            repr(e),
+        ) from e
+    except requests.exceptions.RequestException as e:
+        raise SupabaseError(
+            0, "network",
+            "无法连接 Supabase，请检查网络（或代理）。",
+            repr(e),
+        ) from e
 
-        # 5xx 视为临时故障，可以重试；4xx 是确定性问题，不重试
-        if resp.status_code >= 500 and attempt < attempts:
-            time.sleep(config.RETRY_BACKOFF * (2**attempt))
-            continue
+    if resp.status_code >= 400:
+        raise _translate(resp.status_code, resp.text)
 
-        if resp.status_code >= 400:
-            raise _translate(resp.status_code, resp.text)
-
-        return resp
-
-    raise SupabaseError(0, "retry_exhausted", "请求失败且重试次数已用尽。", repr(last_error))
+    return resp
 
 
 def select(

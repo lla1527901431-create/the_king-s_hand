@@ -28,12 +28,10 @@
 
 from __future__ import annotations
 
-import time
-
 import requests
 
 import config
-from agent import db
+from agent import db, http_client
 
 ACCESS_COOKIE = "kh_access"
 REFRESH_COOKIE = "kh_refresh"
@@ -64,39 +62,27 @@ def _headers() -> dict[str, str]:
 
 
 def _post(path: str, payload: dict, *, label: str) -> dict:
-    """调 Supabase Auth。失败时翻译成人话。"""
-    last_error: Exception | None = None
-    for attempt in range(config.REQUEST_RETRIES + 1):
-        try:
-            resp = requests.post(
-                _auth_url(path),
-                headers=_headers(),
-                json=payload,
-                timeout=config.REQUEST_TIMEOUT,
-            )
-        except requests.exceptions.Timeout as e:
-            last_error = e
-            if attempt < config.REQUEST_RETRIES:
-                time.sleep(config.RETRY_BACKOFF * (2**attempt))
-                continue
-            raise AuthError("连接登录服务超时，请检查网络后重试。", status=504) from e
-        except requests.exceptions.RequestException as e:
-            last_error = e
-            if attempt < config.REQUEST_RETRIES:
-                time.sleep(config.RETRY_BACKOFF * (2**attempt))
-                continue
-            raise AuthError("无法连接登录服务，请检查网络。", status=502) from e
+    """调 Supabase Auth。失败时翻译成人话。
 
-        if resp.status_code >= 500 and attempt < config.REQUEST_RETRIES:
-            time.sleep(config.RETRY_BACKOFF * (2**attempt))
-            continue
+    走 agent/http_client.py 的连接池 —— 登录本身要飞一次跨境往返，
+    复用连接能从 5 秒级降到 0.5 秒级。
+    """
+    try:
+        resp = http_client.request(
+            "POST",
+            _auth_url(path),
+            headers=_headers(),
+            json_body=payload,
+        )
+    except requests.exceptions.Timeout as e:
+        raise AuthError("连接登录服务超时，请检查网络后重试。", status=504) from e
+    except requests.exceptions.RequestException as e:
+        raise AuthError("无法连接登录服务，请检查网络。", status=502) from e
 
-        if resp.status_code >= 400:
-            raise AuthError(_translate(resp.text, label), status=resp.status_code)
+    if resp.status_code >= 400:
+        raise AuthError(_translate(resp.text, label), status=resp.status_code)
 
-        return resp.json()
-
-    raise AuthError("登录服务暂时不可用，请稍后重试。", status=502)
+    return resp.json()
 
 
 def _translate(body: str, label: str) -> str:
@@ -238,10 +224,10 @@ def logout(access_token: str) -> None:
     if not access_token:
         return
     try:
-        requests.post(
+        http_client.request(
+            "POST",
             _auth_url("logout"),
             headers={**_headers(), "Authorization": f"Bearer {access_token}"},
-            timeout=config.REQUEST_TIMEOUT,
         )
     except Exception as e:
         print(f"[session] 撤销会话失败（忽略）：{type(e).__name__}")
